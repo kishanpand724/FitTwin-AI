@@ -29,6 +29,22 @@ export type OccasionType =
 
 export type BudgetTier = 'accessible' | 'contemporary' | 'luxury';
 
+export interface FacialMorphology {
+  faceShape: 'oval' | 'square' | 'heart' | 'diamond' | 'round' | 'oblong';
+  jawWidth: number; // 0.8 - 1.25
+  chinPointiness: number; // 0.8 - 1.25
+  cheekboneProminence: number; // 0.8 - 1.25
+  noseBridgeElevation: number; // 0.8 - 1.25
+  noseWidth: number; // 0.8 - 1.25
+  lipFullness: number; // 0.8 - 1.25
+  eyeSpacing: number; // 0.8 - 1.25
+  detectedSkinTone: string;
+  detectedHairStyle: string;
+  detectedHairColor: string;
+  faceTextureUrl?: string;
+  confidenceScore: number;
+}
+
 export interface UserProfile {
   id: string;
   displayName: string;
@@ -40,6 +56,9 @@ export interface UserProfile {
     hairStyle: string;
     hairColor: string;
     referencePhotoUrl?: string;
+    personalizedAvatarGlbUrl?: string;
+    facialMorphology?: FacialMorphology;
+    avatarProvider?: 'neural-photomap' | 'readyplayer-me' | 'avaturn' | 'tripo3d' | 'parametric';
   };
   preferences: {
     styles: StylePreference[];

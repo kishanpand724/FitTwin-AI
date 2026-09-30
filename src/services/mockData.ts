@@ -2,6 +2,8 @@ import heroImg from '../assets/images/hero_fashion_editorial_1790774634384.jpg';
 import avatarImg from '../assets/images/avatar_digital_twin_1790774648245.jpg';
 import outfitSmartImg from '../assets/images/outfit_minimalist_smart_1790774665034.jpg';
 import outfitStreetImg from '../assets/images/outfit_streetwear_urban_1790774681092.jpg';
+import samplePortraitImg from '../assets/images/sample_reference_portrait_1790777868145.jpg';
+import samplePortraitMaleImg from '../assets/images/sample_portrait_male_1790778303678.jpg';
 import { OutfitLook, ProductItem, UserProfile } from '../types';
 
 export const ASSET_IMAGES = {
@@ -9,6 +11,8 @@ export const ASSET_IMAGES = {
   avatar: avatarImg,
   outfitSmart: outfitSmartImg,
   outfitStreet: outfitStreetImg,
+  samplePortrait: samplePortraitImg,
+  samplePortraitMale: samplePortraitMaleImg,
 };
 
 export const SAMPLE_PROFILE: UserProfile = {
@@ -30,7 +34,22 @@ export const SAMPLE_PROFILE: UserProfile = {
     skinTone: '#E0B594',
     hairStyle: 'Textured Bob',
     hairColor: '#2B1E16',
-    referencePhotoUrl: '',
+    referencePhotoUrl: samplePortraitImg,
+    avatarProvider: 'neural-photomap',
+    facialMorphology: {
+      faceShape: 'oval',
+      jawWidth: 0.95,
+      chinPointiness: 1.08,
+      cheekboneProminence: 1.15,
+      noseBridgeElevation: 1.06,
+      noseWidth: 0.94,
+      lipFullness: 1.12,
+      eyeSpacing: 1.02,
+      detectedSkinTone: '#E0B594',
+      detectedHairStyle: 'Textured Bob',
+      detectedHairColor: '#2B1E16',
+      confidenceScore: 97.4,
+    },
   },
   preferences: {
     styles: ['Minimalist', 'Smart Casual', 'Streetwear'],

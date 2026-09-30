@@ -5,7 +5,7 @@
  */
 
 import * as THREE from 'three';
-import { BodyMeasurements } from '../../types';
+import { BodyMeasurements, FacialMorphology } from '../../types';
 import {
   AvatarAppearanceConfig,
   AvatarLayersState,
@@ -24,6 +24,7 @@ export interface AvatarBuilderResult {
   };
   updateMeasurements: (measurements: BodyMeasurements) => void;
   updateAppearance: (appearance: AvatarAppearanceConfig) => void;
+  updateMorphology: (morphology: FacialMorphology) => void;
   updateLayers: (layers: AvatarLayersState) => void;
 }
 
@@ -168,13 +169,27 @@ function createSeamlessTorsoGeometry(
 /**
  * Creates an elegant, sculpted fashion-mannequin head with facial features:
  * contoured cranium, defined brow line, refined nose bridge, high cheekbones, sculpted jaw, and neutral lips.
+ * When facial morphology is provided (from reference photo), it customizes bone structure and
+ * applies the synthesized UV face projection texture map.
  */
-function createSculptedHeadMesh(skinMaterial: THREE.Material): THREE.Group {
+function createSculptedHeadMesh(
+  skinMaterial: THREE.MeshStandardMaterial,
+  morphology?: FacialMorphology
+): THREE.Group {
   const headGroup = new THREE.Group();
+
+  // Morphological scaling multipliers
+  const jawMult = morphology?.jawWidth || 1.0;
+  const chinMult = morphology?.chinPointiness || 1.0;
+  const cheekMult = morphology?.cheekboneProminence || 1.0;
+  const noseElevMult = morphology?.noseBridgeElevation || 1.0;
+  const noseWMult = morphology?.noseWidth || 1.0;
+  const lipMult = morphology?.lipFullness || 1.0;
 
   // 1. Base Cranium & Facial Form (Lathe/Sphere with sculpted displacements)
   const sphereGeo = new THREE.SphereGeometry(0.118, 48, 48);
   const pos = sphereGeo.attributes.position;
+  const uvs = sphereGeo.attributes.uv;
 
   for (let i = 0; i < pos.count; i++) {
     let x = pos.getX(i);
@@ -185,14 +200,14 @@ function createSculptedHeadMesh(skinMaterial: THREE.Material): THREE.Group {
     y *= 1.28;
     z *= 1.1;
 
-    // Jawline taper: narrow from temples down to chin
+    // Jawline taper: narrow from temples down to chin (customized by jawMult)
     if (y < 0) {
-      const taper = 1.0 + y * 2.2; // narrows toward bottom
-      x *= Math.max(0.68, taper);
+      const taper = (1.0 + y * 2.2) * jawMult;
+      x *= Math.max(0.65, taper);
 
-      // Chin projection
+      // Chin projection & pointiness
       if (y < -0.1 && z > 0) {
-        z += 0.014 * (1.0 + y * 6.0);
+        z += 0.015 * chinMult * (1.0 + y * 6.0);
       }
     }
 
@@ -201,15 +216,15 @@ function createSculptedHeadMesh(skinMaterial: THREE.Material): THREE.Group {
       z *= 1.05; // graceful occipital fullness
     }
 
-    // Cheekbones sculpting
+    // Cheekbones sculpting (customized by cheekMult)
     if (y > -0.04 && y < 0.05 && Math.abs(x) > 0.055 && z > 0) {
-      x *= 1.06;
-      z += 0.008;
+      x *= 1.05 * cheekMult;
+      z += 0.009 * cheekMult;
     }
 
-    // Nose bridge protrusion
-    if (Math.abs(x) < 0.022 && y > -0.04 && y < 0.04 && z > 0.06) {
-      z += 0.024 * (1.0 - Math.abs(y) / 0.04);
+    // Nose bridge protrusion (customized by noseElevMult & noseWMult)
+    if (Math.abs(x) < 0.025 * noseWMult && y > -0.04 && y < 0.04 && z > 0.06) {
+      z += 0.025 * noseElevMult * (1.0 - Math.abs(y) / 0.04);
     }
 
     // Gentle eye socket indentation
@@ -221,31 +236,68 @@ function createSculptedHeadMesh(skinMaterial: THREE.Material): THREE.Group {
   }
 
   sphereGeo.computeVertexNormals();
-  const faceMesh = new THREE.Mesh(sphereGeo, skinMaterial);
+
+  // If photo UV texture is available, map it with frontal projection directly
+  let faceMaterial: THREE.MeshStandardMaterial = skinMaterial;
+
+  if (morphology?.faceTextureUrl) {
+    const texLoader = new THREE.TextureLoader();
+    const faceTexture = texLoader.load(morphology.faceTextureUrl);
+    faceTexture.colorSpace = THREE.SRGBColorSpace;
+    faceTexture.wrapS = THREE.ClampToEdgeWrapping;
+    faceTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    // Apply frontal orthographic UV projection so photo aligns cleanly on cranium
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vy = pos.getY(i);
+      const vz = pos.getZ(i);
+
+      if (vz > -0.015) {
+        // Front face: map into frontal region of the 1024 UV canvas
+        const u = 0.5 - (vx / 0.22) * 0.24;
+        const v = 0.50 + (vy / 0.26) * 0.24;
+        uvs.setXY(i, Math.max(0.01, Math.min(0.99, u)), Math.max(0.01, Math.min(0.99, v)));
+      } else {
+        // Back of head: map to pure skin tone border area
+        uvs.setXY(i, 0.05, 0.05);
+      }
+    }
+    uvs.needsUpdate = true;
+
+    faceMaterial = new THREE.MeshStandardMaterial({
+      map: faceTexture,
+      roughness: 0.42,
+      metalness: 0.02,
+    });
+  }
+
+  const faceMesh = new THREE.Mesh(sphereGeo, faceMaterial);
+  faceMesh.name = 'avatar_face_mesh';
   faceMesh.castShadow = true;
   faceMesh.receiveShadow = true;
   headGroup.add(faceMesh);
 
-  // 2. Refined Sculpted Nose Feature
-  const noseGeo = new THREE.ConeGeometry(0.015, 0.048, 16);
+  // 2. Refined Sculpted Nose Feature (uses smooth skinMaterial to avoid UV stretch)
+  const noseGeo = new THREE.ConeGeometry(0.014 * noseWMult, 0.046 * noseElevMult, 16);
   noseGeo.rotateX(Math.PI * 0.12);
   const noseMesh = new THREE.Mesh(noseGeo, skinMaterial);
-  noseMesh.position.set(0, 0.002, 0.122);
-  noseMesh.scale.set(0.7, 1.0, 0.85);
+  noseMesh.position.set(0, 0.002, 0.120 * noseElevMult);
+  noseMesh.scale.set(0.7 * noseWMult, 1.0, 0.85);
   headGroup.add(noseMesh);
 
-  // 3. Subtle Sculpted Lips
-  const upperLipGeo = new THREE.TorusGeometry(0.016, 0.004, 12, 24, Math.PI * 0.9);
+  // 3. Subtle Sculpted Lips (uses smooth skinMaterial for seamless 3D contour)
+  const upperLipGeo = new THREE.TorusGeometry(0.016, 0.0038 * lipMult, 12, 24, Math.PI * 0.9);
   upperLipGeo.rotateZ(Math.PI * 0.05);
   upperLipGeo.rotateX(Math.PI * 0.45);
   const upperLip = new THREE.Mesh(upperLipGeo, skinMaterial);
-  upperLip.position.set(0, -0.045, 0.108);
+  upperLip.position.set(0, -0.045, 0.106);
   headGroup.add(upperLip);
 
-  const lowerLipGeo = new THREE.TorusGeometry(0.014, 0.0045, 12, 24, Math.PI * 0.85);
+  const lowerLipGeo = new THREE.TorusGeometry(0.014, 0.0042 * lipMult, 12, 24, Math.PI * 0.85);
   lowerLipGeo.rotateX(Math.PI * 0.52);
   const lowerLip = new THREE.Mesh(lowerLipGeo, skinMaterial);
-  lowerLip.position.set(0, -0.056, 0.105);
+  lowerLip.position.set(0, -0.056, 0.103);
   headGroup.add(lowerLip);
 
   // 4. Stylized Editorial Ears
@@ -896,21 +948,25 @@ export function buildHighQualityAvatar(
     bottom: 'none',
     outerwear: 'none',
     footwear: 'none',
-  }
+  },
+  morphology?: FacialMorphology
 ): AvatarBuilderResult {
   const rootGroup = new THREE.Group();
   const bodyMeshGroup = new THREE.Group();
   rootGroup.add(bodyMeshGroup);
 
-  // 1. Setup Luxury Materials
+  // 1. Setup Luxury Materials with morphology palette detection fallback
+  const resolvedSkinTone = morphology?.detectedSkinTone || appearance.skinTone || '#E0B594';
+  const resolvedHairColor = morphology?.detectedHairColor || appearance.hairColor || '#2B1E16';
+
   const skinMaterial = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(appearance.skinTone || '#E0B594'),
+    color: new THREE.Color(resolvedSkinTone),
     roughness: 0.38,
     metalness: 0.04,
   });
 
   const hairMaterial = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(appearance.hairColor || '#2B1E16'),
+    color: new THREE.Color(resolvedHairColor),
     roughness: 0.45,
     metalness: 0.15,
   });
@@ -981,8 +1037,8 @@ export function buildHighQualityAvatar(
   neck.castShadow = true;
   bodyMeshGroup.add(neck);
 
-  // 5. Build Sculpted Head & Face
-  const headGroup = createSculptedHeadMesh(skinMaterial);
+  // 5. Build Sculpted Head & Face (with optional facial morphology & UV texture)
+  let headGroup = createSculptedHeadMesh(skinMaterial, morphology);
   headGroup.position.set(0, 1.66 * cal.heightScale, 0);
   bodyMeshGroup.add(headGroup);
 
@@ -1084,6 +1140,19 @@ export function buildHighQualityAvatar(
         hairMeshGroup = createHairstyleMesh(newApp.hairStyle, hairMaterial);
         hairMeshGroup.position.set(0, 1.66 * cal.heightScale, 0);
         bodyMeshGroup.add(hairMeshGroup);
+      }
+    },
+    updateMorphology: (newMorphology: FacialMorphology) => {
+      bodyMeshGroup.remove(headGroup);
+      headGroup = createSculptedHeadMesh(skinMaterial, newMorphology);
+      headGroup.position.set(0, 1.66 * cal.heightScale, 0);
+      bodyMeshGroup.add(headGroup);
+
+      if (newMorphology.detectedSkinTone) {
+        skinMaterial.color.set(newMorphology.detectedSkinTone);
+      }
+      if (newMorphology.detectedHairColor) {
+        hairMaterial.color.set(newMorphology.detectedHairColor);
       }
     },
     updateLayers: applyLayerVisibility,

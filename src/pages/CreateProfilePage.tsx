@@ -16,10 +16,12 @@ import { useProfile } from '../context/ProfileContext';
 import {
   BodyMeasurements,
   BudgetTier,
+  FacialMorphology,
   StylePreference,
   UnitSystem,
   UserProfile,
 } from '../types';
+import { processPhotoToAvatar } from '../services/photoToAvatarPipeline';
 
 interface FormData {
   displayName: string;
@@ -31,6 +33,7 @@ interface FormData {
     hairStyle: string;
     hairColor: string;
     referencePhotoUrl?: string;
+    facialMorphology?: FacialMorphology;
   };
   preferences: {
     styles: StylePreference[];
@@ -238,14 +241,31 @@ export const CreateProfilePage: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = event => {
+      reader.onload = async event => {
+        const photoUrl = event.target?.result as string;
         setFormData(prev => ({
           ...prev,
           appearance: {
             ...prev.appearance,
-            referencePhotoUrl: event.target?.result as string,
+            referencePhotoUrl: photoUrl,
           },
         }));
+
+        try {
+          const morphology = await processPhotoToAvatar(photoUrl);
+          setFormData(prev => ({
+            ...prev,
+            appearance: {
+              ...prev.appearance,
+              referencePhotoUrl: photoUrl,
+              facialMorphology: morphology,
+              skinTone: morphology.detectedSkinTone || prev.appearance.skinTone,
+              hairColor: morphology.detectedHairColor || prev.appearance.hairColor,
+            },
+          }));
+        } catch {
+          // Keep base appearance if background extraction fails
+        }
       };
       reader.readAsDataURL(file);
     }
