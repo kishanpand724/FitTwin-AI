@@ -1,0 +1,6 @@
+{
+  "name": "FitTwin AI",
+  "description": "Your body. Your style. Your digital twin. Discover outfits tailored to your exact measurements and aesthetic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
