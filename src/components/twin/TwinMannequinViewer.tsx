@@ -1,36 +1,65 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { RotateCw, Eye, ZoomIn, ZoomOut, Layers, Sparkles, RefreshCw, Sliders } from 'lucide-react';
+import {
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+  Layers,
+  Sparkles,
+  RefreshCw,
+  Sliders,
+  Shirt,
+  Scissors,
+  Eye,
+  Check,
+} from 'lucide-react';
 import { BodyMeasurements } from '../../types';
+import {
+  AvatarAppearanceConfig,
+  AvatarLayersState,
+  DEFAULT_AVATAR_LAYERS,
+} from '../../services/avatarEngine';
+import { buildHighQualityAvatar, AvatarBuilderResult } from './avatarMeshBuilder';
 import avatarPlaceholderImg from '../../assets/images/avatar_digital_twin_1790774648245.jpg';
 
 interface TwinMannequinViewerProps {
   measurements?: BodyMeasurements;
+  appearance?: AvatarAppearanceConfig;
   isRegenerating?: boolean;
   onRegenerate?: () => void;
+  initialLayers?: AvatarLayersState;
 }
 
 export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
   measurements,
+  appearance,
   isRegenerating = false,
   onRegenerate,
+  initialLayers = DEFAULT_AVATAR_LAYERS,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const [viewMode, setViewMode] = useState<'3d' | 'editorial'>('3d');
   const [isWireframe, setIsWireframe] = useState<boolean>(false);
   const [showMeasurementsOverlay, setShowMeasurementsOverlay] = useState<boolean>(true);
-  const [currentAngle, setCurrentAngle] = useState<'front' | 'side' | 'back'>('front');
+  const [currentAngle, setCurrentAngle] = useState<'front' | 'side' | 'back' | 'custom'>('front');
+  const [layers, setLayers] = useState<AvatarLayersState>(initialLayers);
+  const [activeLayerDrawer, setActiveLayerDrawer] = useState<boolean>(false);
 
-  // Three.js refs
+  // Three.js internal references
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const modelGroupRef = useRef<THREE.Group | null>(null);
-  const materialsRef = useRef<THREE.MeshStandardMaterial[]>([]);
+  const avatarGroupRef = useRef<THREE.Group | null>(null);
+  const builderResultRef = useRef<AvatarBuilderResult | null>(null);
+
+  // Interaction & camera animation state
   const isDraggingRef = useRef<boolean>(false);
   const previousMousePositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const rotationVelocityRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const targetCameraPosRef = useRef<THREE.Vector3 | null>(null);
+  const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0.95, 0));
 
-  // Default measurements if not set
+  // Resolved measurement and appearance defaults
   const m = measurements || {
     height: 175,
     shoulderWidth: 42,
@@ -41,454 +70,646 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
     inseam: 80,
   };
 
+  const app: AvatarAppearanceConfig = appearance || {
+    skinTone: '#E0B594',
+    hairStyle: 'Short Crop',
+    hairColor: '#2B1E16',
+  };
+
   useEffect(() => {
     if (viewMode !== '3d' || !mountRef.current) return;
 
     const container = mountRef.current;
     const width = container.clientWidth || 600;
-    const height = container.clientHeight || 540;
+    const height = container.clientHeight || 560;
 
-    // 1. Scene
+    // 1. Scene Setup
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    scene.background = new THREE.Color(0xf6f5f1);
+    scene.background = new THREE.Color(0xf5f4f0); // Luxury studio off-white
 
-    // 2. Camera
-    const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
-    camera.position.set(0, 1.0, 3.8);
+    // 2. Camera Setup (Properly framed at eye-to-chest level)
+    const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
+    camera.position.set(0, 1.05, 3.4);
+    camera.lookAt(targetLookAtRef.current);
     cameraRef.current = camera;
 
-    // 3. Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // 3. Renderer with soft shadow maps
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+    });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     rendererRef.current = renderer;
 
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // 4. Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    // 4. Professional Studio Lighting
+    // Ambient fill
+    const ambientLight = new THREE.AmbientLight(0xfffdfa, 0.9);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfff6ec, 1.2);
-    keyLight.position.set(2, 4, 3);
+    // Key Light (Soft warm high-angle studio flash)
+    const keyLight = new THREE.DirectionalLight(0xfffaee, 1.4);
+    keyLight.position.set(2.5, 4.2, 3.2);
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.width = 1024;
-    keyLight.shadow.mapSize.height = 1024;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 10;
+    keyLight.shadow.bias = -0.0005;
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0xe4edf5, 0.6);
-    fillLight.position.set(-2, 2, 2);
+    // Fill Light (Diffused cool sky fill for contrast softening)
+    const fillLight = new THREE.DirectionalLight(0xe5eff5, 0.75);
+    fillLight.position.set(-3.0, 2.5, 2.0);
     scene.add(fillLight);
 
-    const rimLight = new THREE.DirectionalLight(0x244d3c, 0.4);
-    rimLight.position.set(0, 3, -3);
+    // Back Rim / Hair Accent Light (Couture silhouette glow)
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.95);
+    rimLight.position.set(0, 3.5, -3.0);
     scene.add(rimLight);
 
-    // Subtle travertine ground disc
-    const floorGeo = new THREE.CylinderGeometry(1.1, 1.15, 0.06, 48);
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: 0xeeece4,
-      roughness: 0.8,
-      metalness: 0.1,
+    // 5. Studio Travertine Podium with Contact Shadow
+    const floorGroup = new THREE.Group();
+    scene.add(floorGroup);
+
+    // Circular stone pedestal
+    const podiumGeo = new THREE.CylinderGeometry(1.08, 1.14, 0.055, 64);
+    const podiumMat = new THREE.MeshStandardMaterial({
+      color: 0xeeebe3,
+      roughness: 0.85,
+      metalness: 0.04,
     });
-    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-    floorMesh.position.y = -0.03;
-    floorMesh.receiveShadow = true;
-    scene.add(floorMesh);
+    const podiumMesh = new THREE.Mesh(podiumGeo, podiumMat);
+    podiumMesh.position.y = -0.028;
+    podiumMesh.receiveShadow = true;
+    floorGroup.add(podiumMesh);
 
-    // Subtle circular grid on floor
-    const grid = new THREE.PolarGridHelper(1.0, 12, 6, 48, 0x244d3c, 0xd4d0c5);
-    grid.position.y = 0.002;
-    scene.add(grid);
-
-    // 5. Build Parametric Mannequin Body
-    const modelGroup = new THREE.Group();
-    modelGroupRef.current = modelGroup;
-    scene.add(modelGroup);
-
-    // Scaling factors based on user measurements (normalized around 175cm base)
-    const heightScale = Math.max(0.85, Math.min(1.2, m.height / 175));
-    const shoulderScale = Math.max(0.8, Math.min(1.25, m.shoulderWidth / 42));
-    const chestScale = Math.max(0.8, Math.min(1.3, m.chest / 90));
-    const waistScale = Math.max(0.75, Math.min(1.3, m.waist / 72));
-    const hipScale = Math.max(0.8, Math.min(1.3, m.hip / 96));
-
-    const mannequinMat = new THREE.MeshStandardMaterial({
-      color: 0xdfdad2,
-      roughness: 0.45,
-      metalness: 0.08,
-      wireframe: isWireframe,
+    // Soft Contact Shadow Disc on Podium
+    const shadowGeo = new THREE.RingGeometry(0.05, 0.92, 48);
+    const shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x20211f,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.DoubleSide,
     });
+    const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
+    shadowMesh.rotation.x = -Math.PI * 0.5;
+    shadowMesh.position.y = 0.001;
+    floorGroup.add(shadowMesh);
 
-    const jointMat = new THREE.MeshStandardMaterial({
-      color: 0x244d3c,
-      roughness: 0.3,
-      metalness: 0.3,
-      wireframe: isWireframe,
-    });
+    // Subtle calibration concentric compass ring
+    const ringGuide = new THREE.PolarGridHelper(0.95, 8, 4, 48, 0x244d3c, 0xd8d4c8);
+    ringGuide.position.y = 0.002;
+    floorGroup.add(ringGuide);
 
-    materialsRef.current = [mannequinMat, jointMat];
+    // 6. Build High-Quality Organically Contoured Avatar
+    const builderResult = buildHighQualityAvatar(m, app, layers);
+    builderResultRef.current = builderResult;
+    avatarGroupRef.current = builderResult.rootGroup;
+    scene.add(builderResult.rootGroup);
 
-    // Head
-    const headGeo = new THREE.SphereGeometry(0.12, 24, 24);
-    headGeo.scale(1, 1.25, 1.1);
-    const head = new THREE.Mesh(headGeo, mannequinMat);
-    head.position.y = 1.62 * heightScale;
-    head.castShadow = true;
-    modelGroup.add(head);
+    // Apply wireframe state if currently toggled
+    if (isWireframe) {
+      builderResult.materials.skin.wireframe = true;
+      builderResult.materials.hair.wireframe = true;
+    }
 
-    // Neck
-    const neckGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.1, 16);
-    const neck = new THREE.Mesh(neckGeo, mannequinMat);
-    neck.position.y = 1.48 * heightScale;
-    modelGroup.add(neck);
+    // Apply measurement guides visibility
+    builderResult.measurementGuidesGroup.visible = showMeasurementsOverlay;
 
-    // Chest & Upper Torso
-    const chestGeo = new THREE.CylinderGeometry(
-      0.17 * shoulderScale,
-      0.14 * chestScale,
-      0.28,
-      20
-    );
-    chestGeo.scale(1, 1, 0.75 * chestScale);
-    const chest = new THREE.Mesh(chestGeo, mannequinMat);
-    chest.position.y = 1.32 * heightScale;
-    chest.castShadow = true;
-    modelGroup.add(chest);
-
-    // Waist / Mid Torso
-    const waistGeo = new THREE.CylinderGeometry(
-      0.14 * chestScale,
-      0.13 * waistScale,
-      0.18,
-      20
-    );
-    waistGeo.scale(1, 1, 0.72 * waistScale);
-    const waist = new THREE.Mesh(waistGeo, mannequinMat);
-    waist.position.y = 1.1 * heightScale;
-    waist.castShadow = true;
-    modelGroup.add(waist);
-
-    // Hips / Pelvis
-    const hipsGeo = new THREE.CylinderGeometry(
-      0.13 * waistScale,
-      0.16 * hipScale,
-      0.2,
-      20
-    );
-    hipsGeo.scale(1, 1, 0.8 * hipScale);
-    const hips = new THREE.Mesh(hipsGeo, mannequinMat);
-    hips.position.y = 0.92 * heightScale;
-    hips.castShadow = true;
-    modelGroup.add(hips);
-
-    // Legs (Thigh + Calf)
-    const legSpacing = 0.08 * hipScale;
-    [-1, 1].forEach(side => {
-      // Hip joint ball
-      const hipJoint = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 12), jointMat);
-      hipJoint.position.set(side * legSpacing, 0.82 * heightScale, 0);
-      modelGroup.add(hipJoint);
-
-      // Thigh
-      const thighGeo = new THREE.CylinderGeometry(0.06 * hipScale, 0.045, 0.38, 16);
-      const thigh = new THREE.Mesh(thighGeo, mannequinMat);
-      thigh.position.set(side * legSpacing, 0.62 * heightScale, 0);
-      thigh.castShadow = true;
-      modelGroup.add(thigh);
-
-      // Knee joint
-      const knee = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 12), jointMat);
-      knee.position.set(side * legSpacing, 0.42 * heightScale, 0);
-      modelGroup.add(knee);
-
-      // Calf
-      const calfGeo = new THREE.CylinderGeometry(0.045, 0.035, 0.38, 16);
-      const calf = new THREE.Mesh(calfGeo, mannequinMat);
-      calf.position.set(side * legSpacing, 0.22 * heightScale, 0);
-      calf.castShadow = true;
-      modelGroup.add(calf);
-
-      // Foot base
-      const footGeo = new THREE.BoxGeometry(0.06, 0.03, 0.14);
-      const foot = new THREE.Mesh(footGeo, jointMat);
-      foot.position.set(side * legSpacing, 0.02, 0.02);
-      foot.castShadow = true;
-      modelGroup.add(foot);
-    });
-
-    // Arms & Shoulders
-    const shoulderBreadth = 0.2 * shoulderScale;
-    [-1, 1].forEach(side => {
-      // Shoulder joint
-      const shoulderJoint = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 12), jointMat);
-      shoulderJoint.position.set(side * shoulderBreadth, 1.44 * heightScale, 0);
-      modelGroup.add(shoulderJoint);
-
-      // Upper arm
-      const upperArmGeo = new THREE.CylinderGeometry(0.04, 0.032, 0.28, 14);
-      const upperArm = new THREE.Mesh(upperArmGeo, mannequinMat);
-      upperArm.position.set(side * (shoulderBreadth + 0.03), 1.28 * heightScale, 0);
-      upperArm.rotation.z = side * -0.12;
-      upperArm.castShadow = true;
-      modelGroup.add(upperArm);
-
-      // Elbow joint
-      const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 12), jointMat);
-      elbow.position.set(side * (shoulderBreadth + 0.06), 1.12 * heightScale, 0);
-      modelGroup.add(elbow);
-
-      // Forearm
-      const forearmGeo = new THREE.CylinderGeometry(0.032, 0.026, 0.26, 14);
-      const forearm = new THREE.Mesh(forearmGeo, mannequinMat);
-      forearm.position.set(side * (shoulderBreadth + 0.07), 0.98 * heightScale, 0);
-      forearm.rotation.z = side * -0.06;
-      forearm.castShadow = true;
-      modelGroup.add(forearm);
-    });
-
-    // Subtly position model in center
-    modelGroup.position.y = 0;
-
-    // 6. Interaction Event Listeners (Rotate on drag)
-    const handleMouseDown = (e: MouseEvent) => {
+    // 7. Interactive Event Listeners (360-degree rotation with damping)
+    const onMouseDown = (e: MouseEvent) => {
       isDraggingRef.current = true;
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
+      rotationVelocityRef.current = { x: 0, y: 0 };
+      targetCameraPosRef.current = null; // stop any running auto-snap
+      setCurrentAngle('custom');
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current || !modelGroupRef.current) return;
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current || !avatarGroupRef.current) return;
       const deltaX = e.clientX - previousMousePositionRef.current.x;
-      modelGroupRef.current.rotation.y += deltaX * 0.01;
+      const deltaY = e.clientY - previousMousePositionRef.current.y;
+
+      avatarGroupRef.current.rotation.y += deltaX * 0.009;
+      rotationVelocityRef.current = { x: deltaX * 0.009, y: deltaY * 0.005 };
+
       previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
     };
 
-    const handleMouseUp = () => {
+    const onMouseUp = () => {
       isDraggingRef.current = false;
     };
 
-    // Touch support for mobile
-    const handleTouchStart = (e: TouchEvent) => {
+    // Touch support for mobile devices
+    const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 1) {
         isDraggingRef.current = true;
-        previousMousePositionRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        previousMousePositionRef.current = {
+          x: e.touches[0].clientX,
+          y: e.touches[0].clientY,
+        };
+        targetCameraPosRef.current = null;
+        setCurrentAngle('custom');
       }
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!isDraggingRef.current || !modelGroupRef.current || e.touches.length !== 1) return;
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isDraggingRef.current || !avatarGroupRef.current || e.touches.length !== 1) return;
       const deltaX = e.touches[0].clientX - previousMousePositionRef.current.x;
-      modelGroupRef.current.rotation.y += deltaX * 0.012;
-      previousMousePositionRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      avatarGroupRef.current.rotation.y += deltaX * 0.011;
+      previousMousePositionRef.current = {
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+      };
     };
 
-    const handleTouchEnd = () => {
+    const onTouchEnd = () => {
       isDraggingRef.current = false;
     };
 
-    container.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    container.addEventListener('touchstart', handleTouchStart);
-    window.addEventListener('touchmove', handleTouchMove);
-    window.addEventListener('touchend', handleTouchEnd);
+    container.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    container.addEventListener('touchstart', onTouchStart);
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
 
-    // Animation Loop
-    let animationFrameId: number;
+    // 8. Animation & Render Loop
+    let animId: number;
     const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
-      // Gentle idle sway if not dragging
-      if (!isDraggingRef.current && modelGroupRef.current) {
-        // very subtle floating ambient rotation
+      animId = requestAnimationFrame(animate);
+
+      // Smooth camera transition if an angle snap or reset is active
+      if (targetCameraPosRef.current && cameraRef.current) {
+        cameraRef.current.position.lerp(targetCameraPosRef.current, 0.075);
+        cameraRef.current.lookAt(targetLookAtRef.current);
+
+        if (cameraRef.current.position.distanceTo(targetCameraPosRef.current) < 0.01) {
+          cameraRef.current.position.copy(targetCameraPosRef.current);
+          targetCameraPosRef.current = null;
+        }
       }
+
+      // Smooth rotation momentum decay when user releases drag
+      if (!isDraggingRef.current && avatarGroupRef.current) {
+        if (Math.abs(rotationVelocityRef.current.x) > 0.0001) {
+          avatarGroupRef.current.rotation.y += rotationVelocityRef.current.x;
+          rotationVelocityRef.current.x *= 0.93; // smooth friction
+        }
+      }
+
       renderer.render(scene, camera);
     };
     animate();
 
-    // Resize handler
+    // 9. Resize Handling
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
-      const newWidth = container.clientWidth;
-      const newHeight = container.clientHeight;
-      camera.aspect = newWidth / newHeight;
+      const newW = container.clientWidth;
+      const newH = container.clientHeight;
+      camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
-      renderer.setSize(newWidth, newHeight);
+      renderer.setSize(newW, newH);
     };
     window.addEventListener('resize', handleResize);
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
+      cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
-      container.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      container.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchmove', handleTouchMove);
-      window.removeEventListener('touchend', handleTouchEnd);
+      container.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      container.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
       renderer.dispose();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [viewMode, m.height, m.shoulderWidth, m.chest, m.waist, m.hip, isWireframe]);
+  }, [
+    viewMode,
+    m.height,
+    m.shoulderWidth,
+    m.chest,
+    m.waist,
+    m.hip,
+    m.armLength,
+    m.inseam,
+    app.skinTone,
+    app.hairColor,
+    app.hairStyle,
+  ]);
 
-  // View angle snapping
+  // Sync Layers when state changes
+  useEffect(() => {
+    if (builderResultRef.current) {
+      builderResultRef.current.updateLayers(layers);
+    }
+  }, [layers]);
+
+  // Sync Measurement Overlay visibility
+  useEffect(() => {
+    if (builderResultRef.current) {
+      builderResultRef.current.measurementGuidesGroup.visible = showMeasurementsOverlay;
+    }
+  }, [showMeasurementsOverlay]);
+
+  // Smooth Camera Snap Controls
   const snapToAngle = (angle: 'front' | 'side' | 'back') => {
     setCurrentAngle(angle);
-    if (!modelGroupRef.current) return;
-    let targetRotation = 0;
-    if (angle === 'front') targetRotation = 0;
-    if (angle === 'side') targetRotation = Math.PI / 2;
-    if (angle === 'back') targetRotation = Math.PI;
+    if (!avatarGroupRef.current) return;
 
-    // Smooth step rotation
-    modelGroupRef.current.rotation.y = targetRotation;
+    let targetRot = 0;
+    if (angle === 'front') targetRot = 0;
+    if (angle === 'side') targetRot = Math.PI * 0.5;
+    if (angle === 'back') targetRot = Math.PI;
+
+    // Set model rotation cleanly
+    avatarGroupRef.current.rotation.y = targetRot;
+    rotationVelocityRef.current = { x: 0, y: 0 };
+
+    // Set camera to standard elevation
+    targetCameraPosRef.current = new THREE.Vector3(0, 1.05, 3.4);
   };
 
-  // Zoom controls
+  // Reset Camera View
+  const handleResetCamera = () => {
+    setCurrentAngle('front');
+    if (avatarGroupRef.current) {
+      avatarGroupRef.current.rotation.y = 0;
+      rotationVelocityRef.current = { x: 0, y: 0 };
+    }
+    targetCameraPosRef.current = new THREE.Vector3(0, 1.05, 3.4);
+  };
+
+  // Zoom controls with safe distance clamping
   const handleZoom = (direction: 'in' | 'out') => {
     if (!cameraRef.current) return;
-    const delta = direction === 'in' ? -0.4 : 0.4;
-    const newZ = cameraRef.current.position.z + delta;
-    if (newZ >= 2.2 && newZ <= 5.5) {
-      cameraRef.current.position.z = newZ;
+    const delta = direction === 'in' ? -0.38 : 0.38;
+    const currentPos = cameraRef.current.position;
+    const dir = currentPos.clone().sub(targetLookAtRef.current).normalize();
+    const currentDist = currentPos.distanceTo(targetLookAtRef.current);
+    const newDist = Math.max(1.8, Math.min(4.8, currentDist + delta));
+
+    targetCameraPosRef.current = targetLookAtRef.current.clone().add(dir.multiplyScalar(newDist));
+  };
+
+  // Wireframe toggle
+  const toggleWireframe = () => {
+    const nextState = !isWireframe;
+    setIsWireframe(nextState);
+    if (builderResultRef.current) {
+      builderResultRef.current.materials.skin.wireframe = nextState;
+      builderResultRef.current.materials.hair.wireframe = nextState;
+      Object.values(builderResultRef.current.materials.clothing).forEach(mat => {
+        mat.wireframe = nextState;
+      });
     }
   };
 
-  const toggleWireframe = () => {
-    setIsWireframe(prev => !prev);
-    materialsRef.current.forEach(mat => {
-      mat.wireframe = !isWireframe;
-      mat.needsUpdate = true;
-    });
+  // Layer Preset Quick Switchers
+  const applyPreset = (presetName: 'mannequin' | 'smart_casual' | 'formal' | 'streetwear') => {
+    if (presetName === 'mannequin') {
+      setLayers({
+        top: 'none',
+        bottom: 'none',
+        outerwear: 'none',
+        footwear: 'none',
+      });
+    } else if (presetName === 'smart_casual') {
+      setLayers({
+        top: 'crewneck',
+        bottom: 'trousers',
+        outerwear: 'none',
+        footwear: 'boots',
+      });
+    } else if (presetName === 'formal') {
+      setLayers({
+        top: 'shirt',
+        bottom: 'trousers',
+        outerwear: 'blazer',
+        footwear: 'boots',
+      });
+    } else if (presetName === 'streetwear') {
+      setLayers({
+        top: 'crewneck',
+        bottom: 'jeans',
+        outerwear: 'none',
+        footwear: 'sneakers',
+      });
+    }
   };
 
   return (
-    <div className="relative w-full h-[520px] md:h-[600px] bg-[#F6F5F1] border border-[#E7E5DF] flex flex-col justify-between overflow-hidden select-none">
+    <div className="relative w-full h-[540px] md:h-[620px] bg-[#F5F4F0] border border-[#E7E5DF] flex flex-col justify-between overflow-hidden select-none">
       {/* Top Header Overlay */}
-      <div className="relative z-10 flex flex-wrap items-center justify-between p-4 bg-white/70 backdrop-blur-sm border-b border-[#E7E5DF]">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-[#244D3C] animate-pulse"></span>
+      <div className="relative z-10 flex flex-wrap items-center justify-between p-4 bg-white/80 backdrop-blur-md border-b border-[#E7E5DF]">
+        <div className="flex items-center gap-2.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-[#244D3C] animate-pulse"></span>
           <span className="text-xs font-semibold tracking-wider uppercase text-[#20211F]">
-            Digital Twin 3D Viewport
+            3D Fashion Avatar Studio
           </span>
-          <span className="text-xs text-[#20211F]/50">·</span>
-          <span className="text-xs text-[#20211F]/70">
-            {m.height}cm Height · {m.waist}cm Waist
+          <span className="text-xs text-[#20211F]/40">·</span>
+          <span className="text-xs text-[#20211F]/70 font-mono">
+            {m.height}cm · {m.chest}C / {m.waist}W / {m.hip}H
           </span>
         </div>
 
-        {/* View mode toggle */}
-        <div className="flex items-center gap-1 bg-[#EBE8E1] p-0.5 rounded-none text-xs">
+        {/* View Mode & Wardrobe Layer Toggle */}
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setViewMode('3d')}
-            className={`px-3 py-1 text-xs font-medium transition-colors ${
-              viewMode === '3d'
-                ? 'bg-white text-[#20211F] shadow-xs'
-                : 'text-[#20211F]/70 hover:text-[#20211F]'
+            onClick={() => setActiveLayerDrawer(prev => !prev)}
+            className={`px-3 py-1 text-xs uppercase tracking-wider font-semibold border flex items-center gap-1.5 transition-colors ${
+              activeLayerDrawer
+                ? 'bg-[#244D3C] text-white border-[#244D3C]'
+                : 'bg-white text-[#20211F] border-[#E7E5DF] hover:border-[#20211F]'
             }`}
           >
-            3D Mannequin
+            <Shirt className="w-3.5 h-3.5" />
+            <span>Wardrobe Layers</span>
           </button>
-          <button
-            onClick={() => setViewMode('editorial')}
-            className={`px-3 py-1 text-xs font-medium transition-colors ${
-              viewMode === 'editorial'
-                ? 'bg-white text-[#20211F] shadow-xs'
-                : 'text-[#20211F]/70 hover:text-[#20211F]'
-            }`}
-          >
-            Avatar Preview
-          </button>
+
+          <div className="flex items-center bg-[#EBE8E1] p-0.5 rounded-none text-xs">
+            <button
+              onClick={() => setViewMode('3d')}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                viewMode === '3d'
+                  ? 'bg-white text-[#20211F] shadow-2xs font-semibold'
+                  : 'text-[#20211F]/70 hover:text-[#20211F]'
+              }`}
+            >
+              3D Avatar
+            </button>
+            <button
+              onClick={() => setViewMode('editorial')}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                viewMode === 'editorial'
+                  ? 'bg-white text-[#20211F] shadow-2xs font-semibold'
+                  : 'text-[#20211F]/70 hover:text-[#20211F]'
+              }`}
+            >
+              Editorial Preview
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Main View Area */}
+      {/* Main 3D Viewport / Editorial Area */}
       <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
         {viewMode === '3d' ? (
           <>
             <div
               ref={mountRef}
               className="w-full h-full cursor-grab active:cursor-grabbing"
-              title="Click and drag to rotate mannequin in 3D"
+              title="Click and drag to rotate mannequin in 360°"
             />
 
-            {/* Measurement Line Overlay Annotation */}
+            {/* Floating Measurement Guides HUD */}
             {showMeasurementsOverlay && (
               <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6">
-                <div className="flex justify-between items-start text-xs font-mono text-[#244D3C] opacity-80">
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
+                <div className="flex justify-between items-start text-xs font-mono text-[#244D3C]">
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs">
                     SHOULDER: {m.shoulderWidth} cm
                   </div>
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs">
                     CHEST: {m.chest} cm
                   </div>
                 </div>
-                <div className="flex justify-between items-center text-xs font-mono text-[#244D3C] opacity-80">
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
+                <div className="flex justify-between items-center text-xs font-mono text-[#244D3C]">
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs">
                     WAIST: {m.waist} cm
                   </div>
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs">
                     HIPS: {m.hip} cm
                   </div>
                 </div>
-                <div className="flex justify-between items-end text-xs font-mono text-[#244D3C] opacity-80">
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
+                <div className="flex justify-between items-end text-xs font-mono text-[#244D3C]">
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs">
                     INSEAM: {m.inseam} cm
                   </div>
-                  <div className="bg-white/80 backdrop-blur-xs px-2 py-1 border border-[#E7E5DF]">
-                    DRAG TO ROTATE 360°
+                  <div className="bg-white/85 backdrop-blur-xs px-2.5 py-1 border border-[#E7E5DF] shadow-2xs text-[#20211F]/60">
+                    DRAG 360° · SCROLL TO ZOOM
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Wardrobe Layer Drawer (Modular Try-On System) */}
+            {activeLayerDrawer && (
+              <div className="absolute top-4 right-4 z-20 w-72 bg-white/95 backdrop-blur-md border border-[#E7E5DF] shadow-xl p-4 space-y-4 animate-in fade-in slide-in-from-right-2 duration-150">
+                <div className="flex items-center justify-between pb-2 border-b border-[#E7E5DF]">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#20211F]">
+                    <Shirt className="w-3.5 h-3.5 text-[#244D3C]" />
+                    <span>Modular Try-On Layers</span>
+                  </div>
+                  <button
+                    onClick={() => setActiveLayerDrawer(false)}
+                    className="text-xs text-[#20211F]/50 hover:text-[#20211F]"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Ensemble Presets */}
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#20211F]/60 block mb-1.5 font-semibold">
+                    Quick Ensemble Presets
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5 text-xs">
+                    <button
+                      onClick={() => applyPreset('mannequin')}
+                      className={`p-1.5 border text-left text-[11px] font-medium transition-colors ${
+                        layers.top === 'none' && layers.bottom === 'none'
+                          ? 'border-[#244D3C] bg-[#E8EDE7] text-[#244D3C]'
+                          : 'border-[#E7E5DF] hover:border-[#20211F]'
+                      }`}
+                    >
+                      Base Mannequin
+                    </button>
+                    <button
+                      onClick={() => applyPreset('smart_casual')}
+                      className={`p-1.5 border text-left text-[11px] font-medium transition-colors ${
+                        layers.top === 'crewneck' && layers.bottom === 'trousers'
+                          ? 'border-[#244D3C] bg-[#E8EDE7] text-[#244D3C]'
+                          : 'border-[#E7E5DF] hover:border-[#20211F]'
+                      }`}
+                    >
+                      Smart Casual
+                    </button>
+                    <button
+                      onClick={() => applyPreset('formal')}
+                      className={`p-1.5 border text-left text-[11px] font-medium transition-colors ${
+                        layers.outerwear === 'blazer'
+                          ? 'border-[#244D3C] bg-[#E8EDE7] text-[#244D3C]'
+                          : 'border-[#E7E5DF] hover:border-[#20211F]'
+                      }`}
+                    >
+                      Tailored Blazer
+                    </button>
+                    <button
+                      onClick={() => applyPreset('streetwear')}
+                      className={`p-1.5 border text-left text-[11px] font-medium transition-colors ${
+                        layers.bottom === 'jeans'
+                          ? 'border-[#244D3C] bg-[#E8EDE7] text-[#244D3C]'
+                          : 'border-[#E7E5DF] hover:border-[#20211F]'
+                      }`}
+                    >
+                      Urban Denim
+                    </button>
+                  </div>
+                </div>
+
+                {/* Individual Layer Selectors */}
+                <div className="space-y-3 pt-2 border-t border-[#E7E5DF] text-xs">
+                  {/* Top */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-[#20211F]/60 block mb-1">
+                      Top Layer
+                    </label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['none', 'crewneck', 'shirt'] as const).map(t => (
+                        <button
+                          key={t}
+                          onClick={() => setLayers(prev => ({ ...prev, top: t }))}
+                          className={`py-1 text-[11px] capitalize border ${
+                            layers.top === t
+                              ? 'bg-[#244D3C] text-white border-[#244D3C]'
+                              : 'bg-white text-[#20211F] border-[#E7E5DF]'
+                          }`}
+                        >
+                          {t === 'none' ? 'None' : t === 'crewneck' ? 'Crewneck' : 'Shirt'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bottom */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-[#20211F]/60 block mb-1">
+                      Bottom Layer
+                    </label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['none', 'trousers', 'jeans'] as const).map(b => (
+                        <button
+                          key={b}
+                          onClick={() => setLayers(prev => ({ ...prev, bottom: b }))}
+                          className={`py-1 text-[11px] capitalize border ${
+                            layers.bottom === b
+                              ? 'bg-[#244D3C] text-white border-[#244D3C]'
+                              : 'bg-white text-[#20211F] border-[#E7E5DF]'
+                          }`}
+                        >
+                          {b === 'none' ? 'None' : b === 'trousers' ? 'Trousers' : 'Jeans'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Outerwear */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-[#20211F]/60 block mb-1">
+                      Outerwear
+                    </label>
+                    <div className="grid grid-cols-2 gap-1">
+                      {(['none', 'blazer'] as const).map(o => (
+                        <button
+                          key={o}
+                          onClick={() => setLayers(prev => ({ ...prev, outerwear: o }))}
+                          className={`py-1 text-[11px] capitalize border ${
+                            layers.outerwear === o
+                              ? 'bg-[#244D3C] text-white border-[#244D3C]'
+                              : 'bg-white text-[#20211F] border-[#E7E5DF]'
+                          }`}
+                        >
+                          {o === 'none' ? 'No Jacket' : 'Wool Blazer'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Footwear */}
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-[#20211F]/60 block mb-1">
+                      Footwear
+                    </label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['none', 'boots', 'sneakers'] as const).map(f => (
+                        <button
+                          key={f}
+                          onClick={() => setLayers(prev => ({ ...prev, footwear: f }))}
+                          className={`py-1 text-[11px] capitalize border ${
+                            layers.footwear === f
+                              ? 'bg-[#244D3C] text-white border-[#244D3C]'
+                              : 'bg-white text-[#20211F] border-[#E7E5DF]'
+                          }`}
+                        >
+                          {f === 'none' ? 'Bare' : f === 'boots' ? 'Boots' : 'Sneakers'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-[#E7E5DF] text-[10px] text-[#20211F]/60 italic">
+                  * Garment draping calibrated to current body ease metrics.
                 </div>
               </div>
             )}
           </>
         ) : (
-          /* Editorial Avatar Placeholder */
+          /* Editorial Concept Preview */
           <div className="relative w-full h-full flex flex-col items-center justify-center p-6 bg-[#F8F7F4]">
-            <div className="relative max-w-sm max-h-[440px] aspect-3/4 overflow-hidden border border-[#E7E5DF] shadow-sm bg-white">
+            <div className="relative max-w-sm max-h-[460px] aspect-3/4 overflow-hidden border border-[#E7E5DF] shadow-md bg-white">
               <img
                 src={avatarPlaceholderImg}
-                alt="Digital Twin Avatar Concept Preview"
+                alt="Digital Twin Editorial Concept Preview"
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#20211F]/80 via-transparent to-transparent flex flex-col justify-end p-5 text-white">
+              <div className="absolute inset-0 bg-gradient-to-t from-[#20211F]/90 via-[#20211F]/20 to-transparent flex flex-col justify-end p-5 text-white">
                 <span className="text-xs uppercase tracking-widest text-[#A6B6A3] font-semibold mb-1">
-                  Avatar preview coming soon
+                  Editorial Concept Preview
                 </span>
                 <p className="text-xs text-[#F8F7F4]/90 leading-relaxed">
-                  High-fidelity generative 3D mesh rendering based on your specific contour metrics.
-                  Full GLB/GLTF export pipeline integrated.
+                  High-fidelity generative neural render matching your calibrated complexion (
+                  {app.skinTone}) and hairstyle ({app.hairStyle}). Full GLB/GLTF export pipeline
+                  integrated.
                 </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Regenerating overlay spinner */}
+        {/* Regenerating Spinner Overlay */}
         {isRegenerating && (
-          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
+          <div className="absolute inset-0 bg-white/85 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
             <RefreshCw className="w-8 h-8 text-[#244D3C] animate-spin mb-3" />
             <h4 className="text-base font-editorial font-medium text-[#20211F]">
-              Recalibrating Silhouette Coordinates...
+              Recalibrating Anatomical Coordinates...
             </h4>
             <p className="text-xs text-[#20211F]/70 mt-1">
-              Recalculating volumetric proportions and drape anchors.
+              Constructing smooth parametric lofting and drape anchor vectors.
             </p>
           </div>
         )}
       </div>
 
       {/* Bottom Floating Control Bar */}
-      <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 p-3 bg-white/90 backdrop-blur-sm border-t border-[#E7E5DF]">
-        {/* Camera Angle Snap */}
-        <div className="flex items-center gap-1">
-          <span className="text-[11px] font-semibold text-[#20211F]/60 uppercase tracking-wider mr-2 hidden sm:inline">
+      <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 p-3 bg-white/95 backdrop-blur-md border-t border-[#E7E5DF]">
+        {/* Camera Angle Snap Controls */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-semibold text-[#20211F]/60 uppercase tracking-wider mr-1 hidden sm:inline">
             Camera
           </span>
           <button
@@ -509,7 +730,7 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
                 : 'bg-white text-[#20211F] border-[#E7E5DF] hover:border-[#20211F]'
             }`}
           >
-            Side
+            Profile
           </button>
           <button
             onClick={() => snapToAngle('back')}
@@ -521,9 +742,16 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
           >
             Back
           </button>
+          <button
+            onClick={handleResetCamera}
+            className="p-1.5 bg-white border border-[#E7E5DF] hover:border-[#20211F] text-[#20211F] transition-colors"
+            title="Reset Camera Framing"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        {/* Viewport Toggles & Actions */}
+        {/* Viewport Toggles & Zoom */}
         <div className="flex items-center gap-2">
           {viewMode === '3d' && (
             <>
@@ -541,6 +769,7 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
               >
                 <ZoomOut className="w-4 h-4" />
               </button>
+
               <button
                 onClick={toggleWireframe}
                 className={`px-2.5 py-1 text-xs flex items-center gap-1.5 border transition-colors ${
@@ -548,11 +777,12 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
                     ? 'bg-[#20211F] text-white border-[#20211F]'
                     : 'bg-white text-[#20211F] border-[#E7E5DF] hover:border-[#20211F]'
                 }`}
-                title="Toggle Wireframe"
+                title="Toggle Wireframe Mesh"
               >
                 <Layers className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Wireframe</span>
               </button>
+
               <button
                 onClick={() => setShowMeasurementsOverlay(prev => !prev)}
                 className={`px-2.5 py-1 text-xs flex items-center gap-1.5 border transition-colors ${
@@ -560,10 +790,10 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
                     ? 'bg-[#E8EDE7] text-[#244D3C] border-[#244D3C]'
                     : 'bg-white text-[#20211F] border-[#E7E5DF] hover:border-[#20211F]'
                 }`}
-                title="Toggle Measurement Annotations"
+                title="Toggle Measurement Caliper Rings"
               >
                 <Sliders className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Metrics</span>
+                <span className="hidden sm:inline">Caliper HUD</span>
               </button>
             </>
           )}
@@ -572,10 +802,10 @@ export const TwinMannequinViewer: React.FC<TwinMannequinViewerProps> = ({
             <button
               onClick={onRegenerate}
               disabled={isRegenerating}
-              className="px-3 py-1 bg-[#244D3C] hover:bg-[#19382C] text-white text-xs uppercase tracking-wider font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              className="px-3.5 py-1 bg-[#244D3C] hover:bg-[#19382C] text-white text-xs uppercase tracking-wider font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
-              <span>Regenerate Avatar</span>
+              <span className="hidden sm:inline">Regenerate</span>
             </button>
           )}
         </div>

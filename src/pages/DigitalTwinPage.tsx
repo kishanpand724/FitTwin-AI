@@ -109,21 +109,23 @@ export const DigitalTwinPage: React.FC = () => {
         <div className="lg:col-span-8 space-y-4">
           <TwinMannequinViewer
             measurements={profile.measurements}
+            appearance={profile.appearance}
             isRegenerating={isRegenerating}
             onRegenerate={handleRegenerate}
           />
 
-          {/* Model Loader Note */}
+          {/* Model Engine Note */}
           <div className="p-4 bg-white border border-[#E7E5DF] flex items-start gap-3">
             <Box className="w-5 h-5 text-[#244D3C] shrink-0 mt-0.5" />
             <div>
               <h4 className="text-xs uppercase tracking-wider font-semibold text-[#20211F]">
-                Parametric Three.js Mannequin Engine
+                Haute Digital Twin & Virtual Try-On Engine
               </h4>
               <p className="text-xs text-[#20211F]/70 mt-0.5 leading-relaxed">
-                Your 3D model dynamically rescales its torso, chest breadth, waist indentation, and
-                leg stride to reflect your inputted measurements. Switch to the Editorial tab to view
-                the upcoming neural avatar preview.
+                Your 3D avatar features smooth organic human contours, sculpted facial features,
+                customized hairstyle, and exact Euclidean scaling ({profile.measurements.height}cm height,{' '}
+                {profile.measurements.shoulderWidth}cm shoulder span, {profile.measurements.waist}cm waist).
+                Click &apos;Wardrobe Layers&apos; to preview tailored garment try-on ensembles.
               </p>
             </div>
           </div>
